@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  hls-streamer:
+    # --- Option 1: Build the image locally ---
+    # Uncomment the 'build' section if you want to build the image yourself
+    # from the Dockerfile in the current directory.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Assign a name to the image being built (optional)
+    image: local/hls-streamer:latest
+
+    # --- Option 2: Use a pre-built image from a registry ---
+    # Comment out the 'build' section above and uncomment 'image' below
+    # Replace YOUR_GITHUB_USERNAME/YOUR_REPO/IMAGE_NAME:TAG with your actual image path
+    # image: ghcr.io/YOUR_GITHUB_USERNAME/YOUR_REPO/hls-streamer:latest
+
+    container_name: hls-streamer
+    ports:
+      # Map the host port (defined in .env) to the container port (also defined in .env)
+      # Make sure SERVER_PORT in .env matches the EXPOSE directive or default in entrypoint.sh
+      - "${SERVER_PORT}:${SERVER_PORT}"
+    env_file:
+      # Load environment variables from the .env file in the same directory
+      - .env
+    restart: unless-stopped
+    # Optional: Mount a volume for the HLS segments if you want to inspect them easily
+    # Be aware this might interfere with cleanup depending on permissions. Use with caution.
+    # volumes:
+    #   - ./hls-data:/hls-web
+    # Add capability needed by ffmpeg for certain operations (might not be strictly needed for -c copy)
+    # cap_add:
+    #   - SYS_NICE

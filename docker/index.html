@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LAN Live Stream</title>
+    <style>
+        body { font-family: sans-serif; background-color: #f0f0f0; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        h1 { color: #333; }
+        #video { background-color: #000; max-width: 90%; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>Live Stream</h1>
+    <video id="video" width="1280" height="800" controls autoplay muted></video>
+
+    <!-- Load hls.js from the local server (served by Python) -->
+    <script src="/hls.js@latest"></script>
+
+    <script>
+        const video = document.getElementById('video');
+        // This path is relative to the server root where index.html is served
+        const videoSrc = '/stream.m3u8';
+
+        if (Hls.isSupported()) {
+            console.log("HLS.js is supported. Initializing...");
+            const hls = new Hls({
+                // Optional: Add HLS.js configuration here if needed
+                // Example: enableWorker: true, lowLatencyMode: true
+            });
+            hls.loadSource(videoSrc);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                console.log("Manifest parsed. Playing video.");
+                video.play().catch(e => console.error("Autoplay failed:", e));
+            });
+            hls.on(Hls.Events.ERROR, function (event, data) {
+                console.error('HLS.js Error:', data);
+                if (data.fatal) {
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            console.error('Fatal network error encountered, trying to recover...');
+                            hls.startLoad(); // or hls.loadSource(videoSrc);
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            console.error('Fatal media error encountered, trying to recover...');
+                            hls.recoverMediaError();
+                            break;
+                        default:
+                            console.error('Unrecoverable HLS.js error. Destroying HLS instance.');
+                            hls.destroy();
+                            break;
+                    }
+                }
+            });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            console.log("Native HLS playback supported (e.g., Safari). Setting src directly.");
+            video.src = videoSrc;
+            video.addEventListener('loadedmetadata', function () {
+                console.log("Metadata loaded for native HLS. Playing video.");
+                video.play().catch(e => console.error("Autoplay failed:", e));
+            });
+            video.addEventListener('error', function(e) {
+                console.error('Native HLS playback error:', e);
+            });
+        } else {
+            console.error("HLS playback is not supported in this browser.");
+            alert("Sorry, your browser doesn't support HLS playback.");
+        }
+    </script>
+</body>
+</html>
