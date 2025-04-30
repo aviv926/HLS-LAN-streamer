@@ -1,16 +1,52 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <!-- Set character encoding -->
+    <meta charset="UTF-8">
+    <!-- Configure viewport for responsive behavior on mobile devices -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LAN Live Stream</title>
     <style>
-        body { font-family: sans-serif; background-color: #f0f0f0; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-        h1 { color: #333; }
-        #video { background-color: #000; max-width: 100%; border: 1px solid #ccc; }
+        body {
+            font-family: sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            color: #333;
+        }
+        #video {
+            background-color: #000;
+            max-width: 100%;
+            border: 1px solid #ccc;
+            /* Ensure video element is positioned for z-index */
+            position: relative;
+            /* Try to lift the video above potentially overlapping elements */
+            z-index: 1;
+        }
+        /* Basic styling for the optional custom button */
+        #customFullscreenBtn {
+             margin-top: 10px;
+             padding: 8px 15px;
+             cursor: pointer;
+        }
     </style>
 </head>
 <body>
     <h1>Live Stream</h1>
-    <video id="video" width="1280" height="800" controls autoplay muted></video>
+
+    <!--
+        Added 'playsinline' for better compatibility, especially on iOS.
+        Kept original attributes: width, height, controls, autoplay, muted.
+    -->
+    <video id="video" width="1280" height="800" controls autoplay muted playsinline></video>
+
+    <!-- Optional: Custom Fullscreen Button (for debugging or as fallback) -->
+    <button id="customFullscreenBtn">Enter Fullscreen (Custom)</button>
 
     <!-- Load hls.js from the local server (served by Python) -->
     <script src="/hls.js@latest"></script>
@@ -24,13 +60,16 @@
             console.log("HLS.js is supported. Initializing...");
             const hls = new Hls({
                 // Optional: Add HLS.js configuration here if needed
-                // Example: enableWorker: true, lowLatencyMode: true
             });
             hls.loadSource(videoSrc);
             hls.attachMedia(video);
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
-                console.log("Manifest parsed. Playing video.");
-                video.play().catch(e => console.error("Autoplay failed:", e));
+                console.log("Manifest parsed. Attempting to play video.");
+                // Muted autoplay is generally allowed, but catch potential errors
+                video.play().catch(e => {
+                    console.error("Autoplay with HLS.js failed:", e);
+                    // You might want to show a play button overlay here if autoplay fails
+                });
             });
             hls.on(Hls.Events.ERROR, function (event, data) {
                 console.error('HLS.js Error:', data);
@@ -38,7 +77,7 @@
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
                             console.error('Fatal network error encountered, trying to recover...');
-                            hls.startLoad(); // or hls.loadSource(videoSrc);
+                            hls.startLoad();
                             break;
                         case Hls.ErrorTypes.MEDIA_ERROR:
                             console.error('Fatal media error encountered, trying to recover...');
@@ -55,16 +94,98 @@
             console.log("Native HLS playback supported (e.g., Safari). Setting src directly.");
             video.src = videoSrc;
             video.addEventListener('loadedmetadata', function () {
-                console.log("Metadata loaded for native HLS. Playing video.");
-                video.play().catch(e => console.error("Autoplay failed:", e));
+                console.log("Metadata loaded for native HLS. Attempting to play video.");
+                // Muted autoplay is generally allowed, but catch potential errors
+                 video.play().catch(e => {
+                     console.error("Autoplay with native HLS failed:", e);
+                     // You might want to show a play button overlay here if autoplay fails
+                 });
             });
             video.addEventListener('error', function(e) {
                 console.error('Native HLS playback error:', e);
+                // Check video.error details if available
+                if (video.error) {
+                    console.error('Video error code:', video.error.code, 'Message:', video.error.message);
+                }
             });
         } else {
             console.error("HLS playback is not supported in this browser.");
-            alert("Sorry, your browser doesn't support HLS playback.");
+            // Provide more user-friendly feedback than just an alert
+            const errorDiv = document.createElement('div');
+            errorDiv.style.color = 'red';
+            errorDiv.textContent = "Sorry, your browser doesn't support the required video playback technology (HLS).";
+            video.parentNode.insertBefore(errorDiv, video.nextSibling);
+            // Hide the video element maybe?
+            video.style.display = 'none';
         }
+
+        // --- Optional Custom Fullscreen Button Logic ---
+        const customFullscreenBtn = document.getElementById('customFullscreenBtn');
+
+        function openFullscreen() {
+            // Use the video element itself for fullscreen request for better controls integration
+            const elem = video; // Request fullscreen for the video element
+
+            if (elem.requestFullscreen) {
+                elem.requestFullscreen().catch(err => console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`));
+            } else if (elem.webkitRequestFullscreen) { /* Safari */
+                elem.webkitRequestFullscreen().catch(err => console.error(`Error attempting to enable webkit full-screen mode: ${err.message} (${err.name})`));
+            } else if (elem.msRequestFullscreen) { /* IE11 */
+                elem.msRequestFullscreen();
+            } else if (elem.webkitEnterFullscreen) { /* Older iOS Safari specific */
+                 elem.webkitEnterFullscreen(); // No promise returned
+            } else {
+                 console.warn("Fullscreen API is not supported on this element.");
+                 customFullscreenBtn.style.display = 'none'; // Hide button if API not found
+            }
+        }
+
+        function exitFullscreen() {
+            if (document.exitFullscreen) {
+                document.exitFullscreen().catch(err => console.error(`Error attempting to exit full-screen mode: ${err.message} (${err.name})`));
+            } else if (document.webkitExitFullscreen) { /* Safari */
+                document.webkitExitFullscreen();
+            } else if (document.msExitFullscreen) { /* IE11 */
+                document.msExitFullscreen();
+            } else {
+                 console.warn("Exit Fullscreen API is not supported.");
+            }
+        }
+
+        // Check if Fullscreen API is generally enabled in the browser
+        const fullscreenEnabled = document.fullscreenEnabled || document.webkitFullscreenEnabled || document.msFullscreenEnabled;
+
+        if (!fullscreenEnabled) {
+             customFullscreenBtn.style.display = 'none';
+             console.warn("Fullscreen mode is not enabled/supported by the browser policy or settings.");
+        } else {
+            customFullscreenBtn.addEventListener('click', () => {
+                 // Check if already in fullscreen
+                 if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+                     openFullscreen();
+                 } else {
+                     exitFullscreen();
+                 }
+            });
+        }
+
+        // Update button text based on fullscreen state changes
+        function updateFullscreenButton() {
+            if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
+                customFullscreenBtn.textContent = 'Exit Fullscreen (Custom)';
+            } else {
+                 customFullscreenBtn.textContent = 'Enter Fullscreen (Custom)';
+            }
+        }
+
+        document.addEventListener('fullscreenchange', updateFullscreenButton);
+        document.addEventListener('webkitfullscreenchange', updateFullscreenButton); // Safari
+        document.addEventListener('msfullscreenchange', updateFullscreenButton);    // IE11
+
+        // Initial button text check in case the page loads in fullscreen (unlikely but possible)
+        updateFullscreenButton();
+         // --- End of Optional Custom Fullscreen Button Logic ---
+
     </script>
 </body>
 </html>
