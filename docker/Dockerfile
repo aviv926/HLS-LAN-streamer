@@ -25,7 +25,8 @@ RUN curl -o /hls-web/hls.js@latest -L https://cdn.jsdelivr.net/npm/hls.js@latest
 # Copy the HTML file into the web serving directory
 COPY index.html /hls-web/index.html
 
-# Copy the entrypoint script
+# Copy the new server script and entrypoint script
+COPY server.py /app/server.py
 COPY entrypoint.sh /app/entrypoint.sh
 
 # Make the entrypoint script executable
