@@ -6,11 +6,14 @@ import threading
 import signal
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
-# Globals to hold ffmpeg state and track active clients
+# Globals for ffmpeg process and client tracking
 ffmpeg_started = False
 ffmpeg_process = None
 active_clients = 0
 active_clients_lock = threading.Lock()
+idle_timer = None
+# Idle timeout in seconds before stopping ffmpeg when no clients are active
+IDLE_TIMEOUT = 10
 
 def start_ffmpeg():
     global ffmpeg_started, ffmpeg_process
@@ -28,7 +31,7 @@ def start_ffmpeg():
             except Exception as e:
                 print(f"Warning: could not remove file {f}: {e}")
 
-    # Determine input URL either from FFMPEG_INPUT_URL or by using yt-dlp to extract it from YT_DLP_URL.
+    # Determine input URL either from FFMPEG_INPUT_URL or via yt-dlp from YT_DLP_URL.
     ffmpeg_input_url = os.getenv("FFMPEG_INPUT_URL", "").strip()
     yt_dlp_url = os.getenv("YT_DLP_URL", "").strip()
 
@@ -71,37 +74,59 @@ def start_ffmpeg():
     ffmpeg_started = True
     print(f"FFmpeg started with PID {ffmpeg_process.pid}")
 
+def stop_ffmpeg():
+    global ffmpeg_started, ffmpeg_process, idle_timer
+    if ffmpeg_started and ffmpeg_process:
+        print("Idle timeout reached. Terminating ffmpeg.")
+        try:
+            ffmpeg_process.terminate()
+            ffmpeg_process.wait()
+            print("FFmpeg terminated due to idle timeout.")
+        except Exception as e:
+            print(f"Error while terminating ffmpeg: {e}")
+        ffmpeg_started = False
+    if idle_timer:
+        idle_timer.cancel()
+        idle_timer = None
+
+def reset_idle_timer():
+    global idle_timer
+    if idle_timer:
+        idle_timer.cancel()
+    idle_timer = threading.Timer(IDLE_TIMEOUT, check_idle)
+    idle_timer.daemon = True
+    idle_timer.start()
+
+def check_idle():
+    with active_clients_lock:
+        if active_clients <= 0:
+            stop_ffmpeg()
+
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         global active_clients, ffmpeg_started
-        # Increment active client count at the start of handling a GET request.
         with active_clients_lock:
             active_clients += 1
+            # Cancel the idle timer if a new request comes in
+            if idle_timer:
+                idle_timer.cancel()
 
-        # If no ffmpeg is running and the request is for the index (or root), start ffmpeg.
+        # On the initial request for the index (or "/index.html"), start ffmpeg if not started.
         if not ffmpeg_started and (self.path == "/" or self.path.startswith("/index.html")):
             threading.Thread(target=start_ffmpeg, daemon=True).start()
 
-        # Serve the requested file
         super().do_GET()
 
     def finish(self):
         try:
             super().finish()
         finally:
-            global active_clients, ffmpeg_started, ffmpeg_process
+            global active_clients
             with active_clients_lock:
                 active_clients -= 1
-                # When no active clients remain, terminate ffmpeg if it is running.
-                if active_clients <= 0 and ffmpeg_started:
-                    print("No active clients. Terminating ffmpeg.")
-                    try:
-                        ffmpeg_process.terminate()
-                        ffmpeg_process.wait()
-                        print("FFmpeg process terminated due to no active clients.")
-                    except Exception as e:
-                        print(f"Error while terminating ffmpeg: {e}")
-                    ffmpeg_started = False
+                if active_clients <= 0:
+                    # Start idle timer when no active client remains.
+                    reset_idle_timer()
 
 def run_server():
     server_port = int(os.getenv("SERVER_PORT", "8007"))
