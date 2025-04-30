@@ -10,8 +10,8 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp using pip
-RUN pip install --no-cache-dir yt-dlp
+# Install yt-dlp and Flask using pip
+RUN pip install --no-cache-dir yt-dlp flask
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -25,11 +25,13 @@ RUN curl -o /hls-web/hls.js@latest -L https://cdn.jsdelivr.net/npm/hls.js@latest
 # Copy the HTML file into the web serving directory
 COPY index.html /hls-web/index.html
 
-# Copy the entrypoint script
+# Copy the new server script and the entrypoint script
+COPY server.py /app/server.py
 COPY entrypoint.sh /app/entrypoint.sh
 
-# Make the entrypoint script executable
+# Make the scripts executable
 RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/server.py
 
 # Expose the default server port (can be overridden by .env)
 EXPOSE 8007
