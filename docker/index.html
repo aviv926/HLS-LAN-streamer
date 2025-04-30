@@ -27,7 +27,6 @@
             object-fit: cover; /* Or 'contain'. 'cover' fills space, may crop. 'contain' shows all, may letterbox */
             background-color: #000; /* Ensure background is black */
             border: none; /* Remove border */
-            /* Removed position: relative and z-index as they are likely not needed with this layout */
         }
 
         /* Hide the default H1 title */
@@ -38,19 +37,6 @@
         /* Hide the custom button by default - rely on native controls */
          #customFullscreenBtn {
             display: none; /* Hide the custom button */
-            /* Optional: Style it as an overlay if you want to keep it
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 10;
-            padding: 10px 20px;
-            cursor: pointer;
-            background-color: rgba(0,0,0,0.7);
-            color: white;
-            border: 1px solid #555;
-            border-radius: 5px;
-            */
          }
 
          /* Basic styling for potential error messages */
@@ -59,53 +45,26 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background-color: rgba(200, 0, 0, 0.8);
+            background-color: rgba(200, 0, 0, 0.8); /* Reddish background */
             padding: 20px;
             border-radius: 5px;
             z-index: 20;
             text-align: center;
+            color: #fff; /* Ensure text is white */
+            font-size: 1.1em;
          }
+
+         /* Style for the "Retrying" message specifically */
+         .error-message.retrying {
+             background-color: rgba(0, 0, 200, 0.8); /* Blue background for retrying */
+         }
+
     </style>
 </head>
 <body>
-    <!-- Title removed from visible page, kept in <title> tag -->
-    <!-- <h1>Live Stream</h1> -->
-
     <!-- Video element - width/height attributes are overridden by CSS but can be fallback -->
     <video id="video" width="1280" height="800" controls autoplay muted playsinline></video>
-    
-    <script>
-        // Assume you have a video element with id 'video'
-        var video = document.getElementById('video');
-        if (Hls.isSupported()) {
-          var hls = new Hls();
-          hls.loadSource('stream.m3u8');
-          hls.attachMedia(video);
-      
-          hls.on(Hls.Events.ERROR, function (event, data) {
-            console.error("HLS error:", data);
-      
-            // Check for fatal network error and that the error message matches our expected error.
-            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              // This line should match the text shown by your player.
-              // Optionally, you can also check for a specific error message in data.details.
-      
-              // Log that we're going to retry.
-              console.log("Video streaming error: Network problem. Check connection or stream source. Retrying...");
-              
-              // Attempt auto-reload after 3 seconds.
-              setTimeout(function () {
-                console.log("Reloading page to retry stream...");
-                location.reload();
-              }, 3000);
-            }
-          });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = 'stream.m3u8';
-        }
-      </script>
-    
-    <!-- Custom button is hidden by default via CSS -->
+       <!-- Custom button is hidden by default via CSS -->
     <button id="customFullscreenBtn">Enter Fullscreen</button>
 
     <!-- Load hls.js from the local server -->
@@ -115,66 +74,121 @@
         const video = document.getElementById('video');
         const videoSrc = '/stream.m3u8';
         let hls = null; // Keep track of hls instance
+        let reloadTimeoutId = null; // To keep track of the reload timeout
 
         // Function to display user-friendly errors
-        function displayError(message) {
+        function displayError(message, isRetrying = false) {
             // Remove existing error messages first
             const existingError = document.querySelector('.error-message');
             if (existingError) {
                 existingError.remove();
             }
+            // Clear any pending reload if a new error occurs
+            if (reloadTimeoutId) {
+                clearTimeout(reloadTimeoutId);
+                reloadTimeoutId = null;
+            }
 
             const errorDiv = document.createElement('div');
             errorDiv.className = 'error-message'; // Use class for styling
+            if (isRetrying) {
+                errorDiv.classList.add('retrying'); // Add specific class for styling retries
+            }
             errorDiv.textContent = message;
             document.body.appendChild(errorDiv); // Append to body to overlay video
             video.style.display = 'none'; // Hide video element on critical error
         }
 
+        // Function to clear error messages
+        function clearError() {
+            const existingError = document.querySelector('.error-message');
+            if (existingError) {
+                existingError.remove();
+            }
+            // Also clear any pending reload timeout if the error clears
+            if (reloadTimeoutId) {
+                clearTimeout(reloadTimeoutId);
+                reloadTimeoutId = null;
+            }
+            video.style.display = 'block'; // Show video again
+        }
+
 
         if (Hls.isSupported()) {
             console.log("HLS.js is supported. Initializing...");
-            hls = new Hls({ // Assign to the outer scope variable
-                // Optional config
-                // Example: Cap quality based on screen size if needed
-                // capLevelToPlayerSize: true,
-                // maxBufferSize: 60, // 60 seconds buffer
-                // maxMaxBufferLength: 120, // Max buffer length
+            hls = new Hls({
+                // Start with a short initial load delay, maybe increase on retry?
+                // manifestLoadingTimeOut: 5000, // milliseconds
+                // levelLoadingTimeOut: 5000,    // milliseconds
+                // fragLoadingTimeOut: 10000,   // milliseconds
             });
             hls.loadSource(videoSrc);
             hls.attachMedia(video);
 
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
                 console.log("Manifest parsed. Attempting to play video.");
+                clearError(); // Clear any previous errors on successful parse
                 video.play().catch(e => {
                     console.error("Autoplay with HLS.js failed:", e);
-                    // Display a message if autoplay fails - user might need to click play
-                    // Note: Muted autoplay is *usually* allowed, but policies can vary.
                     displayError("Autoplay failed. Please click the play button on the video controls.");
-                    video.style.display = 'block'; // Ensure video is visible so they can click play
+                    video.style.display = 'block';
                 });
             });
+
+            // Optional: Clear errors if playback starts successfully after an error
+            hls.on(Hls.Events.BUFFER_APPENDED, function() {
+                 // This event fires frequently, maybe check if an error was previously shown
+                 if (document.querySelector('.error-message')) {
+                     console.log("Playback seems to have recovered, clearing error message.");
+                     clearError();
+                 }
+            });
+
 
             hls.on(Hls.Events.ERROR, function (event, data) {
                 console.error('HLS.js Error:', data);
                  const errorMsgBase = "Video streaming error: ";
+
                 if (data.fatal) {
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
-                            console.error('Fatal network error encountered, trying to recover...');
-                             // Simple recovery: try reloading source after a delay
-                            // setTimeout(() => hls.loadSource(videoSrc), 5000);
-                             displayError(errorMsgBase + "Network problem. Check connection or stream source. Retrying...");
-                             // More robust recovery might involve staggered retries or user notification
-                             // For now, just display error. User might need to refresh.
-                             hls.startLoad(); // Try to restart loading
-                            break;
+                            // This is the key change: Display message and schedule reload
+                            console.error('Fatal network error encountered. Scheduling page reload...');
+                            const networkErrorMessage = errorMsgBase + "Network problem. Check connection or stream source. Retrying...";
+                            displayError(networkErrorMessage, true); // Pass true for isRetrying
+
+                            // Clear any existing timeout before setting a new one
+                            if (reloadTimeoutId) {
+                                clearTimeout(reloadTimeoutId);
+                            }
+
+                            // Reload the page after 5 seconds
+                            reloadTimeoutId = setTimeout(() => {
+                                console.log("Executing reload due to persistent network error.");
+                                window.location.reload();
+                            }, 5000); // 5000 milliseconds = 5 seconds delay
+
+                            // Optional: You could try hls.startLoad() here *as well*,
+                            // but the page reload makes it somewhat redundant. If startLoad()
+                            // succeeds quickly, the BUFFER_APPENDED listener might clear the
+                            // error before the reload happens. Let's rely on reload for now.
+                            // hls.startLoad();
+                            break; // Important: break here so we don't fall through
+
                         case Hls.ErrorTypes.MEDIA_ERROR:
                             console.error('Fatal media error encountered, trying to recover...');
-                            hls.recoverMediaError();
                             displayError(errorMsgBase + "Media playback problem. Trying to recover...");
+                            // Attempt recovery without full page reload for media errors first
+                             try {
+                                 hls.recoverMediaError();
+                             } catch(e) {
+                                 console.error("Media error recovery failed. Destroying HLS.", e);
+                                 displayError(errorMsgBase + "Media recovery failed. Please reload.");
+                                 if (hls) hls.destroy();
+                             }
                             break;
                         default:
+                            // For any other fatal error, display message and stop.
                             console.error('Unrecoverable HLS.js error. Destroying HLS instance.');
                             displayError(errorMsgBase + "Unrecoverable stream error. Please reload the page.");
                             if (hls) hls.destroy(); // Ensure hls is defined before destroying
@@ -183,14 +197,25 @@
                 } else {
                      // Optionally handle non-fatal errors, e.g., buffer stall
                      // console.warn('Non-fatal HLS error:', data.details);
+                     // If a non-fatal error occurs, maybe clear any pending reload?
+                     // Depends on whether non-fatal errors might temporarily fix the fatal one.
+                     // Example: Buffer stall might resolve itself.
+                     // if (reloadTimeoutId) {
+                     //    console.log("Non-fatal error occurred, cancelling scheduled page reload for now.");
+                     //    clearTimeout(reloadTimeoutId);
+                     //    reloadTimeoutId = null;
+                     //}
                 }
             });
 
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Native HLS handling (Safari, iOS) - Reloading on error here might be too aggressive
+            // Let's keep the original error display for native playback for now.
             console.log("Native HLS playback supported (e.g., Safari). Setting src directly.");
             video.src = videoSrc;
             video.addEventListener('loadedmetadata', function () {
                 console.log("Metadata loaded for native HLS. Attempting to play video.");
+                clearError(); // Clear previous errors
                  video.play().catch(e => {
                      console.error("Autoplay with native HLS failed:", e);
                      displayError("Autoplay failed. Please click the play button on the video controls.");
@@ -202,20 +227,34 @@
                  let message = "An unknown video playback error occurred.";
                  if (video.error) {
                     console.error('Video error code:', video.error.code, 'Message:', video.error.message);
-                     // Try to provide more specific messages based on code if needed
-                    message = `Video error code ${video.error.code}. Check stream source or network.`;
+                     // Check for network related error codes if possible (codes vary by browser)
+                     // MEDIA_ERR_NETWORK = 2, MEDIA_ERR_SRC_NOT_SUPPORTED = 4 might indicate issues
+                     if (video.error.code === 2) { // Network error
+                         message = `Video error: Network problem (Code ${video.error.code}). Check connection or stream source.`;
+                         // You *could* add a reload here too, but let's keep it simpler for now.
+                     } else {
+                         message = `Video error code ${video.error.code}. Check stream source or playback capability.`;
+                     }
                  }
-                displayError(message);
+                displayError(message); // Display error, but don't automatically reload native playback
             });
+
+            // Listen for playback starting to clear errors for native HLS too
+            video.addEventListener('playing', function() {
+                if (document.querySelector('.error-message')) {
+                     console.log("Native playback started, clearing error message.");
+                     clearError();
+                 }
+            });
+
         } else {
             console.error("HLS playback is not supported in this browser.");
             displayError("Sorry, your browser doesn't support the required video playback technology (HLS).");
         }
 
-        // --- Fullscreen API Logic (Optional - if you keep the custom button visible) ---
-        // NOTE: This logic is still here but the button is hidden by CSS.
-        // If you want the custom button, change its `display` in CSS.
+        // --- Fullscreen API Logic (Remains unchanged) ---
         const customFullscreenBtn = document.getElementById('customFullscreenBtn');
+        // ... (rest of the fullscreen logic is identical to your original) ...
 
         function openFullscreen(elem) {
             if (elem.requestFullscreen) {
@@ -250,16 +289,14 @@
              console.warn("Fullscreen mode is not enabled/supported by the browser policy or settings.");
         } else {
             customFullscreenBtn.addEventListener('click', () => {
-                 // Request fullscreen on the video element for better control integration
                  if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
-                     openFullscreen(video); // Request fullscreen for the video element
+                     openFullscreen(video);
                  } else {
                      exitFullscreen();
                  }
             });
         }
 
-        // Update button text based on fullscreen state changes
         function updateFullscreenButton() {
              const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
             if (isFullscreen) {
@@ -272,13 +309,9 @@
         document.addEventListener('fullscreenchange', updateFullscreenButton);
         document.addEventListener('webkitfullscreenchange', updateFullscreenButton);
         document.addEventListener('msfullscreenchange', updateFullscreenButton);
-
-        // Initial button text check
         updateFullscreenButton();
         // --- End of Optional Fullscreen Button Logic ---
 
-
-        
     </script>
 </body>
 </html>
