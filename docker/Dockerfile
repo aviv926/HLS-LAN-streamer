@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install FFmpeg, curl (to download hls.js), and clean up
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg curl && \
+    apt-get install -y --no-install-recommends ffmpeg curl iproute2 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

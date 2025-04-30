@@ -20,6 +20,7 @@ HLS_TIME=${HLS_TIME:-4}
 HLS_LIST_SIZE=${HLS_LIST_SIZE:-5}
 HLS_FLAGS=${HLS_FLAGS:-delete_segments}
 HLS_OUTPUT_DIR=${HLS_OUTPUT_DIR:-/hls-web}
+OUTPUT_M3U8=${OUTPUT_M3U8:-stream.m3u8} # Set default output name
 
 # --- Check for required variables ---
 if [[ -z "$YT_DLP_URL" && -z "$FFMPEG_INPUT_URL" ]]; then
@@ -59,53 +60,37 @@ rm -f "$HLS_OUTPUT_DIR"/stream*.m3u8 "$HLS_OUTPUT_DIR"/*.ts
 # Function to start FFmpeg
 start_ffmpeg() {
     echo "Starting FFmpeg..."
-    echo "Command: ffmpeg -i \"$INPUT_URL\" -c copy -f hls -hls_time $HLS_TIME -hls_list_size $HLS_LIST_SIZE -hls_flags $HLS_FLAGS $OUTPUT_M3U8"
+    echo "Command: ffmpeg -i \"$INPUT_URL\" -c copy -f hls -hls_time $HLS_TIME -hls_list_size $HLS_LIST_SIZE -hls_flags $HLS_FLAGS $HLS_OUTPUT_DIR/$OUTPUT_M3U8"
     ffmpeg -i "$INPUT_URL" \
            -c copy \
            -f hls \
            -hls_time "$HLS_TIME" \
            -hls_list_size "$HLS_LIST_SIZE" \
            -hls_flags "$HLS_FLAGS" \
-           "$OUTPUT_M3U8" &
+           "$HLS_OUTPUT_DIR/$OUTPUT_M3U8" &
 
     # Capture FFmpeg PID
     FFMPEG_PID=$!
     echo "FFmpeg started in background with PID $FFMPEG_PID"
 }
 
-# --- Check for active connections before starting FFmpeg ---
-check_connections() {
-  # Use ss to check for established connections on the server port
-  CONNECTION_COUNT=$(ss -o state established '( dport = :'$SERVER_PORT' )' | wc -l)
+# --- Check for active connections and start FFmpeg on first request ---
+INDEX_ACCESSED=0 # Flag to track if index.html has been accessed
 
-  # Subtract 1 to exclude the header line from ss output
-  CONNECTION_COUNT=$((CONNECTION_COUNT - 1))
-
-  if [ "$CONNECTION_COUNT" -gt 0 ]; then
-    echo "Active connection(s) detected. Starting FFmpeg."
-    start_ffmpeg
-    return 0
-  else
-    echo "No active connections. FFmpeg will not start."
-    return 1
-  fi
-}
-
-# --- Initial check and periodic checks ---
-# Perform an initial check for connections
-check_connections
-
-# Check for connections periodically in the background
-while true; do
-  sleep 25 # Check every 60 seconds
-  check_connections
-  # If FFmpeg is not running and connections are detected, start it
-  if [ -z "$FFMPEG_PID" ] || ! ps -p "$FFMPEG_PID" > /dev/null; then
-      if check_connections; then
-          start_ffmpeg
+# Custom handler for HTTP requests
+handle_request() {
+  while read -r request; do
+    # Check if index.html is requested
+    if [[ "$request" == *"GET / HTTP/1."* ]]; then
+      echo "Index.html accessed."
+      INDEX_ACCESSED=1
+      # Start FFmpeg if it's not already running
+      if [ -z "$FFMPEG_PID" ] || ! ps -p "$FFMPEG_PID" > /dev/null; then
+        start_ffmpeg
       fi
-  fi
-done &
+    fi
+  done
+}
 
 # --- Graceful shutdown ---
 cleanup() {
@@ -118,10 +103,12 @@ cleanup() {
 
 trap cleanup TERM INT
 
-# --- Start Python HTTP Server ---
+# --- Start Python HTTP Server with request handling ---
 echo "Starting Python HTTP server on port $SERVER_PORT, serving files from $HLS_OUTPUT_DIR..."
 cd "$HLS_OUTPUT_DIR"
-python3 -m http.server "$SERVER_PORT" --bind 0.0.0.0 &
+
+# Start the server and pipe the output to the request handler
+python3 -m http.server "$SERVER_PORT" --bind 0.0.0.0 | handle_request &
 
 # Capture Python server PID
 SERVER_PID=$!
