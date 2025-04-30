@@ -76,21 +76,31 @@ This project uses `yt-dlp` to fetch stream URLs, `FFmpeg` to re-stream the conte
 
 ## Usage
 
-Make sure you are in the repository directory (`HLS-LAN-streamer`) in your terminal or command prompt.
+Make sure you are in the `docker/` directory in your terminal or command prompt.
 
-1.  **Choose Build or Pull:**
+1.  **Pull the Latest Image (Recommended):**
+    The Docker image is automatically built and published to GitHub Packages. Pull the latest version:
+    ```bash
+    docker compose pull
+    ```
 
-    *   **Option A: Pull Pre-built Image (Recommended for users)**
-        If the maintainer has pushed the image to a container registry (like GitHub Container Registry or Docker Hub) and configured the `image:` line in `docker-compose.yml`, you can pull it directly:
-        ```bash
-        docker compose pull
-        ```
-        *(Note: The provided `docker-compose.yml` is set up to build locally by default. To use a pre-built image, you would comment out the `build:` section and uncomment/edit the `image:` line in `docker-compose.yml`)*
+2.  **Start the Service:**
+    This command starts the container in the background (`-d`). It will use the pulled image and read your configuration from the `.env` file.
+    ```bash
+    docker compose up -d
+    ```
 
-    *   **Option B: Build the Image Locally (Required first time or after code changes)**
-        If you want to build the image yourself from the `Dockerfile`:
+3.  **(Alternative) Build Locally:**
+    If you prefer to build the image yourself (e.g., after modifying the Dockerfile or related scripts):
+    *   Comment out the `image:` line in `docker-compose.yml`.
+    *   Uncomment the `build:` section in `docker-compose.yml`.
+    *   Run the build command:
         ```bash
         docker compose build
+        ```
+    *   Then start the service:
+        ```bash
+        docker compose up -d
         ```
 
 2.  **Start the Service:**

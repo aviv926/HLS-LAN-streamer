@@ -19,7 +19,7 @@ WORKDIR /app
 # Create the directory to serve web content and HLS stream
 RUN mkdir /hls-web
 
-# Download hls.js library and save it with the specific name needed by the html
+# Download hls.js library and save it with the specific name needed by the index.html
 RUN curl -o /hls-web/hls.js@latest -L https://cdn.jsdelivr.net/npm/hls.js@latest
 
 # Copy the HTML file into the web serving directory
