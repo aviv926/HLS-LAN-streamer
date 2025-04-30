@@ -5,16 +5,15 @@ import threading
 import time
 import logging
 import signal
-# Change Lock to RLock here
 from threading import RLock
 from flask import Flask, send_from_directory, Response, abort
 
 # --- Configuration ---
 HLS_OUTPUT_DIR = "/hls-web"
 STREAM_FILE = "stream.m3u8"
-INACTIVITY_TIMEOUT = 60  # Seconds before stopping ffmpeg due to inactivity
+INACTIVITY_TIMEOUT = 60
 SERVER_PORT = int(os.environ.get('SERVER_PORT', 8007))
-INPUT_URL = os.environ.get('INPUT_URL', '') # Will be set by entrypoint.sh
+INPUT_URL = os.environ.get('INPUT_URL', '')
 HLS_TIME = os.environ.get('HLS_TIME', '4')
 HLS_LIST_SIZE = os.environ.get('HLS_LIST_SIZE', '5')
 HLS_FLAGS = os.environ.get('HLS_FLAGS', 'delete_segments')
@@ -22,101 +21,144 @@ OUTPUT_M3U8_PATH = os.path.join(HLS_OUTPUT_DIR, STREAM_FILE)
 
 # --- Global State ---
 ffmpeg_process = None
+ffmpeg_stderr_thread = None
+ffmpeg_stdout_thread = None
 last_request_time = 0
-# Use RLock instead of Lock
 ffmpeg_lock = RLock()
-stop_event = threading.Event()
+stop_event = threading.Event() # Used for main loop and activity checker
 
 # --- Logging ---
+# Add a specific logger for ffmpeg output
+ffmpeg_logger = logging.getLogger('ffmpeg')
+formatter = logging.Formatter('%(asctime)s - FFMPEG - %(levelname)s - %(message)s')
+# Example: Log ffmpeg output to console
+handler = logging.StreamHandler()
+handler.setFormatter(formatter)
+ffmpeg_logger.addHandler(handler)
+ffmpeg_logger.setLevel(logging.INFO) # Or DEBUG for more verbose ffmpeg
+# Prevent double logging if root logger also has a handler
+ffmpeg_logger.propagate = False
+
+# Main application logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+app_logger = logging.getLogger(__name__) # Use default logger for app messages
 
 # --- Flask App ---
 app = Flask(__name__)
 
+# --- FFmpeg Output Logging Thread ---
+def log_stream(stream, logger_func):
+    """Reads a stream line by line and logs it using the provided logger function."""
+    try:
+        # Use iter to read line by line
+        for line in iter(stream.readline, ''):
+            if not line: # Handle empty lines if necessary, or break if stream closes
+                 break
+            logger_func(line.strip())
+    except Exception as e:
+        # Log unexpected errors during stream reading, but don't crash the thread
+        app_logger.error(f"Error reading ffmpeg stream: {e}", exc_info=True)
+    finally:
+        # Ensure stream is closed if possible, though Popen should handle it
+        try:
+            stream.close()
+        except Exception:
+            pass
+        app_logger.info("FFmpeg stream logging thread finished.")
+
+
 # --- FFmpeg Management ---
-# stop_ffmpeg function remains the same as the previous version
 def stop_ffmpeg():
-    global ffmpeg_process
-    with ffmpeg_lock: # This will now work correctly with RLock
-        if ffmpeg_process: # Check if the object exists first
+    global ffmpeg_process, ffmpeg_stderr_thread, ffmpeg_stdout_thread
+    with ffmpeg_lock:
+        if ffmpeg_process:
             pid = ffmpeg_process.pid
             pgid = 0
             try:
-                # Try to get pgid. If process is gone, ProcessLookupError occurs.
                 pgid = os.getpgid(pid)
             except ProcessLookupError:
-                logging.warning(f"Process {pid} already gone before trying to get PGID. Clearing variable.")
-                ffmpeg_process = None # Already dead, just clear the variable
-                return # Nothing more to do
+                app_logger.warning(f"Process {pid} already gone before trying to get PGID. Clearing variable.")
+                ffmpeg_process = None
+                # Threads might still be lingering, try joining briefly
+                if ffmpeg_stderr_thread and ffmpeg_stderr_thread.is_alive():
+                     ffmpeg_stderr_thread.join(timeout=0.1)
+                if ffmpeg_stdout_thread and ffmpeg_stdout_thread.is_alive():
+                     ffmpeg_stdout_thread.join(timeout=0.1)
+                ffmpeg_stderr_thread = None
+                ffmpeg_stdout_thread = None
+                return
 
-            if ffmpeg_process.poll() is None: # Check if it's actually running *after* getting pgid
-                logging.info(f"Attempting to stop ffmpeg process group (PID: {pid}, PGID: {pgid})...")
+            if ffmpeg_process.poll() is None:
+                app_logger.info(f"Attempting to stop ffmpeg process group (PID: {pid}, PGID: {pgid})...")
                 try:
-                    # Send SIGTERM to the entire process group
                     os.killpg(pgid, signal.SIGTERM)
-                    ffmpeg_process.wait(timeout=10) # Wait for graceful shutdown
-                    logging.info(f"FFmpeg process group (PID: {pid}) terminated gracefully.")
+                    ffmpeg_process.wait(timeout=10)
+                    app_logger.info(f"FFmpeg process group (PID: {pid}) terminated gracefully.")
                 except ProcessLookupError:
-                    # This could happen if it died between poll() and killpg()
-                    logging.warning(f"FFmpeg process group (PID: {pid}) already gone during termination attempt.")
+                    app_logger.warning(f"FFmpeg process group (PID: {pid}) already gone during termination attempt.")
                 except subprocess.TimeoutExpired:
-                    logging.warning(f"FFmpeg (PID: {pid}) did not terminate gracefully after 10s, sending SIGKILL to PGID {pgid}.")
+                    app_logger.warning(f"FFmpeg (PID: {pid}) did not terminate gracefully after 10s, sending SIGKILL to PGID {pgid}.")
                     try:
                         os.killpg(pgid, signal.SIGKILL)
-                        # Give a brief moment for kill to take effect
                         time.sleep(0.1)
-                        logging.info(f"FFmpeg process group (PID: {pid}) killed.")
+                        app_logger.info(f"FFmpeg process group (PID: {pid}) killed.")
                     except ProcessLookupError:
-                         logging.warning(f"FFmpeg process group (PID: {pid}) already gone when sending SIGKILL.")
+                         app_logger.warning(f"FFmpeg process group (PID: {pid}) already gone when sending SIGKILL.")
                     except Exception as e:
-                        logging.error(f"Error sending SIGKILL to ffmpeg process group (PID: {pid}, PGID: {pgid}): {e}")
+                        app_logger.error(f"Error sending SIGKILL to ffmpeg process group (PID: {pid}, PGID: {pgid}): {e}")
                 except Exception as e:
-                    logging.error(f"Error stopping ffmpeg process group (PID: {pid}, PGID: {pgid}): {e}")
-                finally:
-                    # Ensure variable is cleared even if errors occurred during kill
-                    logging.info(f"Setting ffmpeg_process to None after termination attempt (PID: {pid}).")
-                    ffmpeg_process = None
+                    app_logger.error(f"Error stopping ffmpeg process group (PID: {pid}, PGID: {pgid}): {e}")
+                # No finally block for ffmpeg_process = None here, wait for threads
             else:
-                # Process object existed but was already dead when poll() was checked
-                logging.warning(f"FFmpeg process (PID: {pid}) was already terminated (exit code {ffmpeg_process.poll()}) before stop command could run kill.")
-                ffmpeg_process = None # Clear the variable
+                app_logger.warning(f"FFmpeg process (PID: {pid}) was already terminated (exit code {ffmpeg_process.poll()}) before stop command could run kill.")
+
+            # --- Wait for logging threads to finish ---
+            # Process is stopped or already dead, now wait for loggers
+            app_logger.info("Waiting for ffmpeg logging threads to finish...")
+            if ffmpeg_stderr_thread and ffmpeg_stderr_thread.is_alive():
+                ffmpeg_stderr_thread.join(timeout=2) # Wait up to 2 seconds
+                if ffmpeg_stderr_thread.is_alive():
+                    app_logger.warning("FFmpeg stderr logging thread did not finish.")
+            if ffmpeg_stdout_thread and ffmpeg_stdout_thread.is_alive():
+                ffmpeg_stdout_thread.join(timeout=1) # Wait up to 1 second
+                if ffmpeg_stdout_thread.is_alive():
+                     app_logger.warning("FFmpeg stdout logging thread did not finish.")
+
+            app_logger.info(f"Setting ffmpeg_process to None after termination and thread join (PID: {pid}).")
+            ffmpeg_process = None
+            ffmpeg_stderr_thread = None
+            ffmpeg_stdout_thread = None
+
         else:
-            # ffmpeg_process was already None
-            logging.info("Stop ffmpeg called, but process was already None.")
+            app_logger.info("Stop ffmpeg called, but process was already None.")
 
-# start_ffmpeg function remains the same as the previous version
+
 def start_ffmpeg():
-    global ffmpeg_process
-    with ffmpeg_lock: # This will now work correctly with RLock
-        # Check if the process object exists AND is running
+    global ffmpeg_process, ffmpeg_stderr_thread, ffmpeg_stdout_thread
+    with ffmpeg_lock:
         if ffmpeg_process and ffmpeg_process.poll() is None:
-             logging.info("Start ffmpeg called, but FFmpeg process object exists and poll() is None (already running).")
-             return True # Indicate already running
+             app_logger.info("Start ffmpeg called, but FFmpeg process object exists and poll() is None (already running).")
+             return True
 
-        # If process is None or not running (poll() is not None), proceed to start
-        logging.info("Start ffmpeg called: Process is None or poll() is not None. Attempting to start.")
+        app_logger.info("Start ffmpeg called: Process is None or poll() is not None. Attempting to start.")
 
         if not INPUT_URL:
-            logging.error("INPUT_URL is not set. Cannot start ffmpeg.")
-            return False # Failed to start
+            app_logger.error("INPUT_URL is not set. Cannot start ffmpeg.")
+            return False
 
         # Clean up old segments before starting
         try:
             cleaned_count = 0
             for f in os.listdir(HLS_OUTPUT_DIR):
                 if f.endswith(".ts") or f == STREAM_FILE:
-                    # Check if file exists before removing, might have been deleted by ffmpeg itself
                     file_path = os.path.join(HLS_OUTPUT_DIR, f)
                     if os.path.exists(file_path):
                         os.remove(file_path)
                         cleaned_count += 1
-            if cleaned_count > 0:
-                logging.info(f"Cleaned {cleaned_count} old HLS file(s).")
-            else:
-                logging.info("No old HLS files found to clean.")
+            if cleaned_count > 0: app_logger.info(f"Cleaned {cleaned_count} old HLS file(s).")
+            else: app_logger.info("No old HLS files found to clean.")
         except OSError as e:
-            logging.warning(f"Error cleaning HLS directory: {e}")
-
+            app_logger.warning(f"Error cleaning HLS directory: {e}")
 
         ffmpeg_cmd = [
             "ffmpeg",
@@ -128,195 +170,177 @@ def start_ffmpeg():
             "-hls_flags", HLS_FLAGS,
             OUTPUT_M3U8_PATH
         ]
-        logging.info(f"Starting ffmpeg command: {' '.join(ffmpeg_cmd)}")
+        app_logger.info(f"Starting ffmpeg command: {' '.join(ffmpeg_cmd)}")
         try:
-            # Use preexec_fn=os.setsid to create a process group
-            # Use text=True for easier stderr reading if needed later, ignore errors
             ffmpeg_process = subprocess.Popen(
                 ffmpeg_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE, # Capture stdout
+                stderr=subprocess.PIPE, # Capture stderr
                 preexec_fn=os.setsid,
-                text=True,
-                errors='ignore'
+                text=True, # Decode streams as text
+                errors='ignore' # Ignore decoding errors
              )
-            # Check if process started successfully
-            time.sleep(0.1) # Give a tiny moment for process to potentially fail immediately
+            time.sleep(0.1)
             if ffmpeg_process.poll() is not None:
-                 # It died immediately
-                 stderr_output = ffmpeg_process.stderr.read()
-                 logging.error(f"FFmpeg process failed immediately after start (Exit code: {ffmpeg_process.poll()}).")
-                 if stderr_output:
-                      logging.error(f"FFmpeg stderr: {stderr_output.strip()}")
-                 ffmpeg_process = None # Ensure it's None
-                 return False # Failed to start
+                 stderr_output = ""
+                 try: stderr_output = ffmpeg_process.stderr.read()
+                 except: pass
+                 app_logger.error(f"FFmpeg process failed immediately after start (Exit code: {ffmpeg_process.poll()}).")
+                 if stderr_output: ffmpeg_logger.error(f"FFmpeg stderr: {stderr_output.strip()}") # Use ffmpeg logger
+                 ffmpeg_process = None
+                 return False
 
-            # Process started and seems okay for now
-            logging.info(f"FFmpeg started with PID: {ffmpeg_process.pid}, PGID: {os.getpgid(ffmpeg_process.pid)}")
+            app_logger.info(f"FFmpeg started with PID: {ffmpeg_process.pid}, PGID: {os.getpgid(ffmpeg_process.pid)}")
+
+            # --- Start logging threads ---
+            ffmpeg_stderr_thread = threading.Thread(
+                target=log_stream,
+                args=(ffmpeg_process.stderr, ffmpeg_logger.warning), # Log stderr as warning
+                daemon=True
+            )
+            ffmpeg_stdout_thread = threading.Thread(
+                target=log_stream,
+                args=(ffmpeg_process.stdout, ffmpeg_logger.info), # Log stdout as info
+                daemon=True
+            )
+            ffmpeg_stderr_thread.start()
+            ffmpeg_stdout_thread.start()
+            app_logger.info("Started FFmpeg stdout/stderr logging threads.")
+
             time.sleep(2) # Small delay to allow ffmpeg to create initial files
-            return True # Started successfully
+            return True
         except Exception as e:
-             logging.error(f"Failed to execute Popen for ffmpeg: {e}", exc_info=True)
-             ffmpeg_process = None # Ensure it's None if Popen failed
-             return False # Failed to start
+             app_logger.error(f"Failed to execute Popen for ffmpeg: {e}", exc_info=True)
+             ffmpeg_process = None
+             return False
 
 
 # --- Activity Checker ---
-# check_activity function remains the same as the previous version
 def check_activity():
-    """Runs in a background thread to stop ffmpeg if inactive."""
-    global ffmpeg_process # Ensure global is used
+    global ffmpeg_process
     while not stop_event.is_set():
-        with ffmpeg_lock: # Acquire lock to check/stop (RLock allows re-acquisition)
-            current_process = ffmpeg_process # Work with a local reference inside the lock
+        with ffmpeg_lock:
+            current_process = ffmpeg_process
             if current_process:
                 process_poll = current_process.poll()
-                if process_poll is None: # Check if running
-                    # Check inactivity only if ffmpeg is running
+                if process_poll is None:
                     if time.time() - last_request_time > INACTIVITY_TIMEOUT:
-                        logging.info(f"Inactivity detected (last request: {time.time() - last_request_time:.1f}s ago). Stopping ffmpeg.")
-                        stop_ffmpeg() # stop_ffmpeg acquires RLock again, which is now allowed
-                    # else: still active, do nothing
+                        app_logger.info(f"Inactivity detected (last request: {time.time() - last_request_time:.1f}s ago). Stopping ffmpeg.")
+                        stop_ffmpeg()
                 else:
-                    # FFmpeg died on its own
-                    logging.warning(f"Detected FFmpeg process (PID: {current_process.pid}) died unexpectedly (Exit code: {process_poll}). Cleaning up variable.")
-                    stderr_output = ""
-                    try:
-                        # Read remaining stderr if possible
-                        stderr_output = current_process.stderr.read()
-                    except Exception:
-                        pass # Ignore errors reading stderr if process is gone
-                    if stderr_output:
-                        logging.warning(f"FFmpeg stderr: {stderr_output.strip()}")
-                    ffmpeg_process = None # Mark as stopped by setting global variable
-            # else: ffmpeg_process is None, nothing to check/stop
+                    # Check if it died *since the last check*
+                    # We need to ensure stop_ffmpeg is called only once per death
+                    app_logger.warning(f"Detected FFmpeg process (PID: {current_process.pid}) died unexpectedly (Exit code: {process_poll}). Calling stop_ffmpeg to cleanup.")
+                    # Call stop_ffmpeg to ensure threads are joined and variable cleared
+                    stop_ffmpeg() # stop_ffmpeg checks if process exists, so it's safe to call again
+            # else: ffmpeg_process is None
 
-        # Check every 5 seconds (outside the lock)
         stop_event.wait(5)
-    logging.info("Activity checker thread finished.")
+    app_logger.info("Activity checker thread finished.")
 
 
 # --- Routes ---
-# Routes remain the same as the previous version
 @app.route('/')
 def index():
-    """Serves the main HTML page."""
-    logging.info("Request for index.html")
-    # Treat access to index as activity
+    app_logger.info("Request for index.html")
     update_last_request_time()
-    # Attempt to start ffmpeg if not running when index is accessed
     if not start_ffmpeg():
-         # Optional: Maybe return an error page if ffmpeg fails to start?
-         logging.error("ffmpeg failed to start when accessing index.html")
-         # For now, just serve index.html anyway, client-side might show error
-         pass
+         app_logger.error("ffmpeg failed to start when accessing index.html")
     return send_from_directory(HLS_OUTPUT_DIR, 'index.html')
 
 @app.route('/hls.js@latest')
 def hls_js():
-    """Serves the hls.js library."""
-    logging.info("Request for hls.js")
-    # Don't treat hls.js request as activity for ffmpeg restart,
-    # only index.html and actual stream files should trigger it.
-    # update_last_request_time() # Removed
+    app_logger.info("Request for hls.js")
     return send_from_directory(HLS_OUTPUT_DIR, 'hls.js@latest')
 
 @app.route('/<path:filename>')
 def hls_files(filename):
-    """Serves HLS manifest and segments."""
     if filename == STREAM_FILE or filename.endswith(".ts"):
-        logging.info(f"Request for HLS file: {filename}")
-        update_last_request_time() # Update activity time for HLS files
-        if not start_ffmpeg(): # Ensure ffmpeg is running
-             # If start_ffmpeg returns false, it means it either failed to start
-             # or INPUT_URL wasn't set. Check logs for details.
-             logging.error(f"ffmpeg not running or failed to start when requesting {filename}.")
-             abort(503) # Service Unavailable seems appropriate
+        app_logger.info(f"Request for HLS file: {filename}")
+        update_last_request_time()
+        if not start_ffmpeg():
+             app_logger.error(f"ffmpeg not running or failed to start when requesting {filename}.")
+             abort(503)
 
-        # Wait a moment for the file to appear if ffmpeg just started
         file_path = os.path.join(HLS_OUTPUT_DIR, filename)
-        max_wait = 5 # seconds
+        max_wait = 5
         wait_interval = 0.5
         waited = 0
         while not os.path.exists(file_path) and waited < max_wait:
-            logging.warning(f"File {filename} not found, waiting...")
-            time.sleep(wait_interval)
-            waited += wait_interval
-            # Check if ffmpeg died while we were waiting
+            # Check ffmpeg status while waiting
             with ffmpeg_lock:
                 if ffmpeg_process is None or ffmpeg_process.poll() is not None:
-                    logging.error("FFmpeg process is not running while waiting for file.")
+                    app_logger.error(f"FFmpeg process (PID: {ffmpeg_process.pid if ffmpeg_process else 'N/A'}) is not running while waiting for file {filename}.")
                     abort(503) # Service Unavailable
+            app_logger.warning(f"File {filename} not found, waiting {wait_interval}s...")
+            time.sleep(wait_interval) # Wait outside the lock
+            waited += wait_interval
+
 
         if not os.path.exists(file_path):
-             logging.error(f"File {filename} not found after waiting.")
-             abort(404) # Not Found
+             app_logger.error(f"File {filename} not found after waiting {waited:.1f}s.")
+             # Check ffmpeg status one last time
+             with ffmpeg_lock:
+                 if ffmpeg_process is None or ffmpeg_process.poll() is not None:
+                     app_logger.error(f"FFmpeg process (PID: {ffmpeg_process.pid if ffmpeg_process else 'N/A'}) is not running after failing to find {filename}.")
+                     abort(503) # Service Unavailable
+                 else:
+                     # FFmpeg is running but file still not found? Possible issue.
+                     app_logger.error(f"FFmpeg (PID: {ffmpeg_process.pid}) is running but {filename} still not found. Aborting request.")
+                     abort(404) # Not Found, maybe ffmpeg isn't creating it?
 
         # Serve the file
         response = send_from_directory(HLS_OUTPUT_DIR, filename)
-        # Add headers to prevent caching of manifest and segments
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         return response
     elif filename == 'favicon.ico':
-        # Browsers often request this, return 404 cleanly
         abort(404)
     else:
-        logging.warning(f"Denying request for non-HLS/index/favicon file: {filename}")
+        app_logger.warning(f"Denying request for non-HLS/index/favicon file: {filename}")
         abort(404)
 
 def update_last_request_time():
-    """Updates the timestamp of the last relevant activity."""
     global last_request_time
     last_request_time = time.time()
-    logging.debug(f"Updated last_request_time to {last_request_time}")
+    # app_logger.debug(f"Updated last_request_time to {last_request_time}") # Reduce noise
 
 
 # --- Main Execution ---
-# Main execution block remains the same as the previous version
 if __name__ == '__main__':
-    # Ensure INPUT_URL is available
     if not INPUT_URL:
-        logging.error("FATAL: INPUT_URL environment variable not set.")
+        app_logger.error("FATAL: INPUT_URL environment variable not set.")
         exit(1)
 
-    logging.info(f"Input URL configured: {INPUT_URL}")
-    logging.info(f"HLS Output Dir: {HLS_OUTPUT_DIR}")
-    logging.info(f"Inactivity Timeout: {INACTIVITY_TIMEOUT}s")
-    logging.info(f"Server Port: {SERVER_PORT}")
+    app_logger.info(f"Input URL configured: {INPUT_URL}")
+    app_logger.info(f"HLS Output Dir: {HLS_OUTPUT_DIR}")
+    app_logger.info(f"Inactivity Timeout: {INACTIVITY_TIMEOUT}s")
+    app_logger.info(f"Server Port: {SERVER_PORT}")
 
-    # Perform initial cleanup
+    # Initial cleanup (remains same)
     try:
         initial_cleaned_count = 0
         if os.path.exists(HLS_OUTPUT_DIR):
             for f in os.listdir(HLS_OUTPUT_DIR):
                 if f.endswith(".ts") or f == STREAM_FILE:
                     file_path = os.path.join(HLS_OUTPUT_DIR, f)
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                        initial_cleaned_count += 1
-        if initial_cleaned_count > 0:
-             logging.info(f"Performed initial cleanup of {initial_cleaned_count} HLS files.")
-    except Exception as e:
-        logging.warning(f"Error during initial cleanup: {e}")
+                    if os.path.exists(file_path): os.remove(file_path); initial_cleaned_count += 1
+        if initial_cleaned_count > 0: app_logger.info(f"Performed initial cleanup of {initial_cleaned_count} HLS files.")
+    except Exception as e: app_logger.warning(f"Error during initial cleanup: {e}")
 
-
-    # Start the background activity checker thread
     checker_thread = threading.Thread(target=check_activity, daemon=True)
     checker_thread.start()
-    logging.info("Activity checker thread started.")
+    app_logger.info("Activity checker thread started.")
 
-    # Start Flask server
-    logging.info(f"Starting Flask server on 0.0.0.0:{SERVER_PORT}")
+    app_logger.info(f"Starting Flask server on 0.0.0.0:{SERVER_PORT}")
     try:
-        # Use waitress or gunicorn in production instead of app.run
         app.run(host='0.0.0.0', port=SERVER_PORT, threaded=True)
     finally:
-        logging.info("Flask server shutting down.")
-        stop_event.set() # Signal checker thread to stop
-        logging.info("Stopping ffmpeg process if running...")
-        stop_ffmpeg() # Ensure ffmpeg is stopped on exit
-        logging.info("Waiting for activity checker thread to finish...")
-        checker_thread.join(timeout=2) # Wait briefly for checker thread
-        logging.info("Cleanup complete. Exiting.")
+        app_logger.info("Flask server shutting down.")
+        stop_event.set()
+        app_logger.info("Stopping ffmpeg process if running...")
+        stop_ffmpeg()
+        app_logger.info("Waiting for activity checker thread to finish...")
+        checker_thread.join(timeout=2)
+        app_logger.info("Cleanup complete. Exiting.")
