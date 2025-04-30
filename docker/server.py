@@ -4,7 +4,9 @@ import subprocess
 import threading
 import time
 import logging
-import signal # Ensure signal is imported
+import signal
+# Change Lock to RLock here
+from threading import RLock
 from flask import Flask, send_from_directory, Response, abort
 
 # --- Configuration ---
@@ -21,7 +23,8 @@ OUTPUT_M3U8_PATH = os.path.join(HLS_OUTPUT_DIR, STREAM_FILE)
 # --- Global State ---
 ffmpeg_process = None
 last_request_time = 0
-ffmpeg_lock = threading.Lock()
+# Use RLock instead of Lock
+ffmpeg_lock = RLock()
 stop_event = threading.Event()
 
 # --- Logging ---
@@ -31,9 +34,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 
 # --- FFmpeg Management ---
+# stop_ffmpeg function remains the same as the previous version
 def stop_ffmpeg():
     global ffmpeg_process
-    with ffmpeg_lock:
+    with ffmpeg_lock: # This will now work correctly with RLock
         if ffmpeg_process: # Check if the object exists first
             pid = ffmpeg_process.pid
             pgid = 0
@@ -80,10 +84,10 @@ def stop_ffmpeg():
             # ffmpeg_process was already None
             logging.info("Stop ffmpeg called, but process was already None.")
 
-
+# start_ffmpeg function remains the same as the previous version
 def start_ffmpeg():
     global ffmpeg_process
-    with ffmpeg_lock:
+    with ffmpeg_lock: # This will now work correctly with RLock
         # Check if the process object exists AND is running
         if ffmpeg_process and ffmpeg_process.poll() is None:
              logging.info("Start ffmpeg called, but FFmpeg process object exists and poll() is None (already running).")
@@ -158,11 +162,12 @@ def start_ffmpeg():
 
 
 # --- Activity Checker ---
+# check_activity function remains the same as the previous version
 def check_activity():
     """Runs in a background thread to stop ffmpeg if inactive."""
     global ffmpeg_process # Ensure global is used
     while not stop_event.is_set():
-        with ffmpeg_lock: # Acquire lock to check/stop
+        with ffmpeg_lock: # Acquire lock to check/stop (RLock allows re-acquisition)
             current_process = ffmpeg_process # Work with a local reference inside the lock
             if current_process:
                 process_poll = current_process.poll()
@@ -170,7 +175,7 @@ def check_activity():
                     # Check inactivity only if ffmpeg is running
                     if time.time() - last_request_time > INACTIVITY_TIMEOUT:
                         logging.info(f"Inactivity detected (last request: {time.time() - last_request_time:.1f}s ago). Stopping ffmpeg.")
-                        stop_ffmpeg() # stop_ffmpeg handles locking internally
+                        stop_ffmpeg() # stop_ffmpeg acquires RLock again, which is now allowed
                     # else: still active, do nothing
                 else:
                     # FFmpeg died on its own
@@ -192,6 +197,7 @@ def check_activity():
 
 
 # --- Routes ---
+# Routes remain the same as the previous version
 @app.route('/')
 def index():
     """Serves the main HTML page."""
@@ -268,6 +274,7 @@ def update_last_request_time():
 
 
 # --- Main Execution ---
+# Main execution block remains the same as the previous version
 if __name__ == '__main__':
     # Ensure INPUT_URL is available
     if not INPUT_URL:
