@@ -14,7 +14,7 @@ services:
     # --- Option 2: Use a pre-built image from a registry ---
     # Comment out the 'build' section above and uncomment 'image' below
     # Replace YOUR_GITHUB_USERNAME/YOUR_REPO/IMAGE_NAME:TAG with your actual image path
-    image: ghcr.io/aviv926/HLS-LAN-streamer/hls-streamer:latest
+    image: ghcr.io/aviv926/hls-lan-streamer:main
 
     container_name: hls-streamer
     ports:
