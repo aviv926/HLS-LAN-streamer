@@ -6,9 +6,11 @@ import threading
 import signal
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
-# Global flag and variable for the ffmpeg process
+# Globals to hold ffmpeg state and track active clients
 ffmpeg_started = False
 ffmpeg_process = None
+active_clients = 0
+active_clients_lock = threading.Lock()
 
 def start_ffmpeg():
     global ffmpeg_started, ffmpeg_process
@@ -26,19 +28,17 @@ def start_ffmpeg():
             except Exception as e:
                 print(f"Warning: could not remove file {f}: {e}")
 
-    # Determine input URL either from FFMPEG_INPUT_URL or by using yt-dlp to extract from YT_DLP_URL.
+    # Determine input URL either from FFMPEG_INPUT_URL or by using yt-dlp to extract it from YT_DLP_URL.
     ffmpeg_input_url = os.getenv("FFMPEG_INPUT_URL", "").strip()
     yt_dlp_url = os.getenv("YT_DLP_URL", "").strip()
 
     if ffmpeg_input_url:
         input_url = ffmpeg_input_url
     elif yt_dlp_url:
-        # Use yt-dlp to fetch the actual stream URL
         print("Fetching stream URL with yt-dlp...")
         try:
             res = subprocess.run(["yt-dlp", "-f", "best", "-g", yt_dlp_url],
                                  capture_output=True, text=True, check=True)
-            # yt-dlp might output multiple lines; choose the first one
             input_url = res.stdout.splitlines()[0].strip()
         except subprocess.CalledProcessError as e:
             print("Error: Failed to get URL using yt-dlp.", file=sys.stderr)
@@ -55,7 +55,6 @@ def start_ffmpeg():
     hls_flags = os.getenv("HLS_FLAGS", "delete_segments")
     output_m3u8 = os.path.join(hls_output_dir, "stream.m3u8")
 
-    # Build the ffmpeg command
     ffmpeg_cmd = [
         "ffmpeg",
         "-i", input_url,
@@ -68,21 +67,41 @@ def start_ffmpeg():
     ]
     print("Starting FFmpeg with command:")
     print(" ".join(ffmpeg_cmd))
-
-    # Start ffmpeg in the background
     ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
     ffmpeg_started = True
     print(f"FFmpeg started with PID {ffmpeg_process.pid}")
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
-        global ffmpeg_started
-        # Check if the path is "/" or "/index.html"
+        global active_clients, ffmpeg_started
+        # Increment active client count at the start of handling a GET request.
+        with active_clients_lock:
+            active_clients += 1
+
+        # If no ffmpeg is running and the request is for the index (or root), start ffmpeg.
         if not ffmpeg_started and (self.path == "/" or self.path.startswith("/index.html")):
-            # Start ffmpeg in a separate thread so that the HTTP server is non-blocking
             threading.Thread(target=start_ffmpeg, daemon=True).start()
-        # Serve the file from the HLS output directory
-        return super().do_GET()
+
+        # Serve the requested file
+        super().do_GET()
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            global active_clients, ffmpeg_started, ffmpeg_process
+            with active_clients_lock:
+                active_clients -= 1
+                # When no active clients remain, terminate ffmpeg if it is running.
+                if active_clients <= 0 and ffmpeg_started:
+                    print("No active clients. Terminating ffmpeg.")
+                    try:
+                        ffmpeg_process.terminate()
+                        ffmpeg_process.wait()
+                        print("FFmpeg process terminated due to no active clients.")
+                    except Exception as e:
+                        print(f"Error while terminating ffmpeg: {e}")
+                    ffmpeg_started = False
 
 def run_server():
     server_port = int(os.getenv("SERVER_PORT", "8007"))
@@ -91,14 +110,16 @@ def run_server():
     httpd = HTTPServer(("", server_port), CustomHTTPRequestHandler)
     print(f"Starting custom HTTP server on port {server_port}, serving files from {hls_output_dir}")
 
-    # Signal handler for graceful shutdown
     def shutdown_handler(signum, frame):
         global ffmpeg_process
         print(f"Received signal {signum}, shutting down...")
         if ffmpeg_process:
-            ffmpeg_process.terminate()
-            ffmpeg_process.wait()
-            print("FFmpeg process terminated.")
+            try:
+                ffmpeg_process.terminate()
+                ffmpeg_process.wait()
+                print("FFmpeg process terminated.")
+            except Exception as e:
+                print(f"Error terminating ffmpeg process: {e}")
         httpd.shutdown()
         sys.exit(0)
 
