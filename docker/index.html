@@ -73,7 +73,38 @@
 
     <!-- Video element - width/height attributes are overridden by CSS but can be fallback -->
     <video id="video" width="1280" height="800" controls autoplay muted playsinline></video>
-
+    
+    <script>
+        // Assume you have a video element with id 'video'
+        var video = document.getElementById('video');
+        if (Hls.isSupported()) {
+          var hls = new Hls();
+          hls.loadSource('stream.m3u8');
+          hls.attachMedia(video);
+      
+          hls.on(Hls.Events.ERROR, function (event, data) {
+            console.error("HLS error:", data);
+      
+            // Check for fatal network error and that the error message matches our expected error.
+            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              // This line should match the text shown by your player.
+              // Optionally, you can also check for a specific error message in data.details.
+      
+              // Log that we're going to retry.
+              console.log("Video streaming error: Network problem. Check connection or stream source. Retrying...");
+              
+              // Attempt auto-reload after 3 seconds.
+              setTimeout(function () {
+                console.log("Reloading page to retry stream...");
+                location.reload();
+              }, 3000);
+            }
+          });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = 'stream.m3u8';
+        }
+      </script>
+    
     <!-- Custom button is hidden by default via CSS -->
     <button id="customFullscreenBtn">Enter Fullscreen</button>
 
@@ -246,6 +277,8 @@
         updateFullscreenButton();
         // --- End of Optional Fullscreen Button Logic ---
 
+
+        
     </script>
 </body>
 </html>
