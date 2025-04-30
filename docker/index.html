@@ -4,139 +4,199 @@
     <!-- Set character encoding -->
     <meta charset="UTF-8">
     <!-- Configure viewport for responsive behavior on mobile devices -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LAN Live Stream</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>LAN Live Stream (Fullscreen)</title>
     <style>
-        body {
-            font-family: sans-serif;
-            background-color: #f0f0f0;
+        /* Reset browser defaults and make body fill the viewport */
+        html, body {
             margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden; /* Prevent scrollbars */
+            background-color: #000; /* Black background for cinematic feel */
+            font-family: sans-serif; /* Keep for potential error messages */
+            color: #fff; /* White text for errors on black background */
         }
-        h1 {
-            color: #333;
-        }
+
+        /* Make the video element fill its container (the body) */
         #video {
-            background-color: #000;
-            max-width: 100%;
-            border: 1px solid #ccc;
-            /* Ensure video element is positioned for z-index */
-            position: relative;
-            /* Try to lift the video above potentially overlapping elements */
-            z-index: 1;
+            width: 100vw; /* 100% of viewport width */
+            height: 100vh; /* 100% of viewport height */
+            display: block; /* Remove potential extra space below */
+            object-fit: cover; /* Or 'contain'. 'cover' fills space, may crop. 'contain' shows all, may letterbox */
+            background-color: #000; /* Ensure background is black */
+            border: none; /* Remove border */
+            /* Removed position: relative and z-index as they are likely not needed with this layout */
         }
-        /* Basic styling for the optional custom button */
-        #customFullscreenBtn {
-             margin-top: 10px;
-             padding: 8px 15px;
-             cursor: pointer;
+
+        /* Hide the default H1 title */
+        h1 {
+            display: none;
         }
+
+        /* Hide the custom button by default - rely on native controls */
+         #customFullscreenBtn {
+            display: none; /* Hide the custom button */
+            /* Optional: Style it as an overlay if you want to keep it
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            padding: 10px 20px;
+            cursor: pointer;
+            background-color: rgba(0,0,0,0.7);
+            color: white;
+            border: 1px solid #555;
+            border-radius: 5px;
+            */
+         }
+
+         /* Basic styling for potential error messages */
+         .error-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(200, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 5px;
+            z-index: 20;
+            text-align: center;
+         }
     </style>
 </head>
 <body>
-    <h1>Live Stream</h1>
+    <!-- Title removed from visible page, kept in <title> tag -->
+    <!-- <h1>Live Stream</h1> -->
 
-    <!--
-        Added 'playsinline' for better compatibility, especially on iOS.
-        Kept original attributes: width, height, controls, autoplay, muted.
-    -->
+    <!-- Video element - width/height attributes are overridden by CSS but can be fallback -->
     <video id="video" width="1280" height="800" controls autoplay muted playsinline></video>
 
-    <!-- Optional: Custom Fullscreen Button (for debugging or as fallback) -->
-    <button id="customFullscreenBtn">Enter Fullscreen (Custom)</button>
+    <!-- Custom button is hidden by default via CSS -->
+    <button id="customFullscreenBtn">Enter Fullscreen</button>
 
-    <!-- Load hls.js from the local server (served by Python) -->
+    <!-- Load hls.js from the local server -->
     <script src="/hls.js@latest"></script>
 
     <script>
         const video = document.getElementById('video');
-        // This path is relative to the server root where index.html is served
         const videoSrc = '/stream.m3u8';
+        let hls = null; // Keep track of hls instance
+
+        // Function to display user-friendly errors
+        function displayError(message) {
+            // Remove existing error messages first
+            const existingError = document.querySelector('.error-message');
+            if (existingError) {
+                existingError.remove();
+            }
+
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error-message'; // Use class for styling
+            errorDiv.textContent = message;
+            document.body.appendChild(errorDiv); // Append to body to overlay video
+            video.style.display = 'none'; // Hide video element on critical error
+        }
+
 
         if (Hls.isSupported()) {
             console.log("HLS.js is supported. Initializing...");
-            const hls = new Hls({
-                // Optional: Add HLS.js configuration here if needed
+            hls = new Hls({ // Assign to the outer scope variable
+                // Optional config
+                // Example: Cap quality based on screen size if needed
+                // capLevelToPlayerSize: true,
+                // maxBufferSize: 60, // 60 seconds buffer
+                // maxMaxBufferLength: 120, // Max buffer length
             });
             hls.loadSource(videoSrc);
             hls.attachMedia(video);
+
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
                 console.log("Manifest parsed. Attempting to play video.");
-                // Muted autoplay is generally allowed, but catch potential errors
                 video.play().catch(e => {
                     console.error("Autoplay with HLS.js failed:", e);
-                    // You might want to show a play button overlay here if autoplay fails
+                    // Display a message if autoplay fails - user might need to click play
+                    // Note: Muted autoplay is *usually* allowed, but policies can vary.
+                    displayError("Autoplay failed. Please click the play button on the video controls.");
+                    video.style.display = 'block'; // Ensure video is visible so they can click play
                 });
             });
+
             hls.on(Hls.Events.ERROR, function (event, data) {
                 console.error('HLS.js Error:', data);
+                 const errorMsgBase = "Video streaming error: ";
                 if (data.fatal) {
                     switch (data.type) {
                         case Hls.ErrorTypes.NETWORK_ERROR:
                             console.error('Fatal network error encountered, trying to recover...');
-                            hls.startLoad();
+                             // Simple recovery: try reloading source after a delay
+                            // setTimeout(() => hls.loadSource(videoSrc), 5000);
+                             displayError(errorMsgBase + "Network problem. Check connection or stream source. Retrying...");
+                             // More robust recovery might involve staggered retries or user notification
+                             // For now, just display error. User might need to refresh.
+                             hls.startLoad(); // Try to restart loading
                             break;
                         case Hls.ErrorTypes.MEDIA_ERROR:
                             console.error('Fatal media error encountered, trying to recover...');
                             hls.recoverMediaError();
+                            displayError(errorMsgBase + "Media playback problem. Trying to recover...");
                             break;
                         default:
                             console.error('Unrecoverable HLS.js error. Destroying HLS instance.');
-                            hls.destroy();
+                            displayError(errorMsgBase + "Unrecoverable stream error. Please reload the page.");
+                            if (hls) hls.destroy(); // Ensure hls is defined before destroying
                             break;
                     }
+                } else {
+                     // Optionally handle non-fatal errors, e.g., buffer stall
+                     // console.warn('Non-fatal HLS error:', data.details);
                 }
             });
+
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             console.log("Native HLS playback supported (e.g., Safari). Setting src directly.");
             video.src = videoSrc;
             video.addEventListener('loadedmetadata', function () {
                 console.log("Metadata loaded for native HLS. Attempting to play video.");
-                // Muted autoplay is generally allowed, but catch potential errors
                  video.play().catch(e => {
                      console.error("Autoplay with native HLS failed:", e);
-                     // You might want to show a play button overlay here if autoplay fails
+                     displayError("Autoplay failed. Please click the play button on the video controls.");
+                     video.style.display = 'block';
                  });
             });
             video.addEventListener('error', function(e) {
                 console.error('Native HLS playback error:', e);
-                // Check video.error details if available
-                if (video.error) {
+                 let message = "An unknown video playback error occurred.";
+                 if (video.error) {
                     console.error('Video error code:', video.error.code, 'Message:', video.error.message);
-                }
+                     // Try to provide more specific messages based on code if needed
+                    message = `Video error code ${video.error.code}. Check stream source or network.`;
+                 }
+                displayError(message);
             });
         } else {
             console.error("HLS playback is not supported in this browser.");
-            // Provide more user-friendly feedback than just an alert
-            const errorDiv = document.createElement('div');
-            errorDiv.style.color = 'red';
-            errorDiv.textContent = "Sorry, your browser doesn't support the required video playback technology (HLS).";
-            video.parentNode.insertBefore(errorDiv, video.nextSibling);
-            // Hide the video element maybe?
-            video.style.display = 'none';
+            displayError("Sorry, your browser doesn't support the required video playback technology (HLS).");
         }
 
-        // --- Optional Custom Fullscreen Button Logic ---
+        // --- Fullscreen API Logic (Optional - if you keep the custom button visible) ---
+        // NOTE: This logic is still here but the button is hidden by CSS.
+        // If you want the custom button, change its `display` in CSS.
         const customFullscreenBtn = document.getElementById('customFullscreenBtn');
 
-        function openFullscreen() {
-            // Use the video element itself for fullscreen request for better controls integration
-            const elem = video; // Request fullscreen for the video element
-
+        function openFullscreen(elem) {
             if (elem.requestFullscreen) {
                 elem.requestFullscreen().catch(err => console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`));
             } else if (elem.webkitRequestFullscreen) { /* Safari */
                 elem.webkitRequestFullscreen().catch(err => console.error(`Error attempting to enable webkit full-screen mode: ${err.message} (${err.name})`));
             } else if (elem.msRequestFullscreen) { /* IE11 */
                 elem.msRequestFullscreen();
-            } else if (elem.webkitEnterFullscreen) { /* Older iOS Safari specific */
-                 elem.webkitEnterFullscreen(); // No promise returned
+            } else if (elem.webkitEnterFullscreen) { /* Older iOS Safari */
+                 elem.webkitEnterFullscreen();
             } else {
                  console.warn("Fullscreen API is not supported on this element.");
-                 customFullscreenBtn.style.display = 'none'; // Hide button if API not found
             }
         }
 
@@ -152,17 +212,16 @@
             }
         }
 
-        // Check if Fullscreen API is generally enabled in the browser
         const fullscreenEnabled = document.fullscreenEnabled || document.webkitFullscreenEnabled || document.msFullscreenEnabled;
 
         if (!fullscreenEnabled) {
-             customFullscreenBtn.style.display = 'none';
+             customFullscreenBtn.style.display = 'none'; // Definitely hide if not supported
              console.warn("Fullscreen mode is not enabled/supported by the browser policy or settings.");
         } else {
             customFullscreenBtn.addEventListener('click', () => {
-                 // Check if already in fullscreen
+                 // Request fullscreen on the video element for better control integration
                  if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
-                     openFullscreen();
+                     openFullscreen(video); // Request fullscreen for the video element
                  } else {
                      exitFullscreen();
                  }
@@ -171,20 +230,21 @@
 
         // Update button text based on fullscreen state changes
         function updateFullscreenButton() {
-            if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
-                customFullscreenBtn.textContent = 'Exit Fullscreen (Custom)';
+             const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+            if (isFullscreen) {
+                customFullscreenBtn.textContent = 'Exit Fullscreen';
             } else {
-                 customFullscreenBtn.textContent = 'Enter Fullscreen (Custom)';
+                 customFullscreenBtn.textContent = 'Enter Fullscreen';
             }
         }
 
         document.addEventListener('fullscreenchange', updateFullscreenButton);
-        document.addEventListener('webkitfullscreenchange', updateFullscreenButton); // Safari
-        document.addEventListener('msfullscreenchange', updateFullscreenButton);    // IE11
+        document.addEventListener('webkitfullscreenchange', updateFullscreenButton);
+        document.addEventListener('msfullscreenchange', updateFullscreenButton);
 
-        // Initial button text check in case the page loads in fullscreen (unlikely but possible)
+        // Initial button text check
         updateFullscreenButton();
-         // --- End of Optional Custom Fullscreen Button Logic ---
+        // --- End of Optional Fullscreen Button Logic ---
 
     </script>
 </body>
