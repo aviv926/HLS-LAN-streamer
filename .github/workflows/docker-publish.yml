@@ -17,10 +17,9 @@ on:
 # Define environment variables accessible by all jobs
 env:
   REGISTRY: ghcr.io
-  # IMAGE_NAME: ${{ github.repository }} # Format: owner/repository-name
-  # Let's make it lowercase for consistency as Docker Hub/ghcr prefer it
-  IMAGE_NAME: ${{ lower(github.repository) }}
-
+  # Use the repository name directly. metadata-action will format it.
+  # Format will be: owner/repository-name
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -48,10 +47,11 @@ jobs:
         id: meta # Assign an ID to refer to the outputs of this step later
         uses: docker/metadata-action@v5
         with:
+          # Provide the base image name. The action will generate lowercase tags.
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Generates tags like:
-          # - latest (on default branch push)
-          # - git commit SHA (short format)
+          # - ghcr.io/owner/reponame:latest (on default branch push)
+          # - ghcr.io/owner/reponame:<sha> (git commit SHA short format)
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
