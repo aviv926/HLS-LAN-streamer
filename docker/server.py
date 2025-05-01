@@ -13,7 +13,7 @@ active_clients = 0
 active_clients_lock = threading.Lock()
 idle_timer = None
 # Idle timeout in seconds before stopping ffmpeg when no clients are active
-IDLE_TIMEOUT = 10
+IDLE_TIMEOUT = 60
 
 def start_ffmpeg():
     global ffmpeg_started, ffmpeg_process
