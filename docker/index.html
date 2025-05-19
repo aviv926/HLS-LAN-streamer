@@ -71,15 +71,48 @@
     <script src="/hls.js@latest"></script>
 
     <script>
+         // Helper that tests whether autoplay without user gesture is allowed
+        function isAutoplayAllowed() {
+            return new Promise((resolve) => {
+            const testVid = document.createElement('video');
+            testVid.muted = true;
+            testVid.playsInline = true;
+            testVid.autoplay = true;
+            testVid.style.display = 'none';
+            // tiny silent video data URI
+            testVid.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29tAAAAAGlzb21pc28yYXZjMQAAAAhmcmVl...';
+            document.body.appendChild(testVid);
+
+            const playPromise = testVid.play();
+            if (playPromise !== undefined) {
+                playPromise
+                .then(() => resolve(true))   // autoplay succeeded
+                .catch(() => resolve(false)); // autoplay blocked
+            } else {
+                resolve(true);                // no promise → assume allowed
+            }
+            // NOTE: we are NOT removing testVid here, per your request
+            });
+        }
+
         const video = document.getElementById('video');
         const videoSrc = '/stream.m3u8';
-        let hls = null; // Keep track of hls instance
-        let reloadTimeoutId = null; // To keep track of the reload timeout
-        // setTimeout(()=>{
-        // // video.muted = false;
-        // video.autoplay = true;
-        // console.log(video.muted , video.autoplay)
-        // })
+        let hls = null;                // Keep track of hls instance
+        let reloadTimeoutId = null;    // To keep track of the reload timeout
+
+        // Replace setTimeout with permission check
+        isAutoplayAllowed().then((allowed) => {
+            if (allowed) {
+            // mediaPlaybackRequiresUserGesture == false
+            video.muted = false;
+            video.autoplay = true;
+            } else {
+            // still requires user gesture
+            video.muted = true;
+            video.autoplay = true;
+            }
+            console.log('muted:', video.muted, 'autoplay:', video.autoplay);
+        });
         // Function to display user-friendly errors
         function displayError(message, isRetrying = false) {
             // Remove existing error messages first
