@@ -82,7 +82,6 @@
        
         // --- START: WebView Autoplay Permission Check ---
         function checkWebViewAutoplayPermission() {
-            const permissionMessageDiv = document.getElementById('permissionCheckMessage');
             return new Promise((resolve) => {
                 const testVideo = document.createElement('video');
                 // Use a tiny, valid MP4 data URI. This is a 1x1 black pixel video.
@@ -107,8 +106,7 @@
                     playPromise.then(() => {
                         // Autoplay succeeded without user gesture
                         console.log("AUTOPLAY CHECK: Succeeded. mediaPlaybackRequiresUserGesture is likely FALSE.");
-                        permissionMessageDiv.textContent = "Autoplay Status: Allowed (mediaPlaybackRequiresUserGesture likely false)";
-                        permissionMessageDiv.style.color = 'lightgreen';
+   
                         testVideo.pause(); // Stop the test video
                         if (testVideo.parentNode) document.body.removeChild(testVideo);
                         resolve(false); // Gesture is NOT required
@@ -116,13 +114,11 @@
                         if (testVideo.parentNode) document.body.removeChild(testVideo);
                         if (error.name === 'NotAllowedError') {
                             console.warn("AUTOPLAY CHECK: Failed with NotAllowedError. mediaPlaybackRequiresUserGesture is likely TRUE.");
-                            permissionMessageDiv.textContent = "Autoplay Status: Blocked (mediaPlaybackRequiresUserGesture likely true)";
-                            permissionMessageDiv.style.color = 'orange';
+
                             resolve(true); // Gesture IS required
                         } else {
                             console.warn("AUTOPLAY CHECK: Failed with other error:", error.name, error.message);
-                            permissionMessageDiv.textContent = `Autoplay Status: Test inconclusive (Error: ${error.name})`;
-                            permissionMessageDiv.style.color = 'yellow';
+
                             resolve(true); // Assume gesture is required if test is inconclusive
                         }
                     });
@@ -130,8 +126,7 @@
                     // video.play() did not return a Promise (very old browsers/edge cases)
                     if (testVideo.parentNode) document.body.removeChild(testVideo);
                     console.warn("AUTOPLAY CHECK: video.play() did not return a Promise. Assuming gesture is required.");
-                    permissionMessageDiv.textContent = "Autoplay Status: Test N/A (play() not promise-based)";
-                    permissionMessageDiv.style.color = 'lightgray';
+
                     resolve(true); // Assume gesture is required
                 }
             });
