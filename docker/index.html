@@ -63,7 +63,7 @@
 </head>
 <body>
     <!-- Video element - width/height attributes are overridden by CSS but can be fallback -->
-    <video id="video" width="1280" height="800" controls autoplay muted playsinline></video>
+    <video id="video" width="1280" height="800" controls autoplay playsinline></video>
        <!-- Custom button is hidden by default via CSS -->
     <button id="customFullscreenBtn">Enter Fullscreen</button>
 
@@ -75,7 +75,87 @@
         const videoSrc = '/stream.m3u8';
         let hls = null; // Keep track of hls instance
         let reloadTimeoutId = null; // To keep track of the reload timeout
+       
+       
+       
+       
+       
+        // --- START: WebView Autoplay Permission Check ---
+        function checkWebViewAutoplayPermission() {
+            return new Promise((resolve) => {
+                const testVideo = document.createElement('video');
+                // Use a tiny, valid MP4 data URI. This is a 1x1 black pixel video.
+                // Using a data URI avoids network requests for this test.
+                testVideo.src = 'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAAZRtZWF0AAAAGm1kYXQAAAMAAAEA';
+                testVideo.muted = false; // Crucial: we want to test unmuted autoplay
+                testVideo.playsInline = true; // Good practice for webviews
 
+                // Make it non-intrusive but technically renderable
+                testVideo.style.position = 'absolute';
+                testVideo.style.opacity = '0';
+                testVideo.style.width = '1px';
+                testVideo.style.height = '1px';
+                testVideo.style.top = '-10px'; // Off-screen
+                testVideo.style.left = '-10px'; // Off-screen
+
+                document.body.appendChild(testVideo);
+
+                const playPromise = testVideo.play();
+
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        // Autoplay succeeded without user gesture
+                        console.log("AUTOPLAY CHECK: Succeeded. mediaPlaybackRequiresUserGesture is likely FALSE.");
+   
+                        testVideo.pause(); // Stop the test video
+                        if (testVideo.parentNode) document.body.removeChild(testVideo);
+                        resolve(false); // Gesture is NOT required
+                    }).catch(error => {
+                        if (testVideo.parentNode) document.body.removeChild(testVideo);
+                        if (error.name === 'NotAllowedError') {
+                            console.warn("AUTOPLAY CHECK: Failed with NotAllowedError. mediaPlaybackRequiresUserGesture is likely TRUE.");
+
+                            resolve(true); // Gesture IS required
+                        } else {
+                            console.warn("AUTOPLAY CHECK: Failed with other error:", error.name, error.message);
+
+                            resolve(false); // Assume gesture is required if test is inconclusive
+                        }
+                    });
+                } else {
+                    // video.play() did not return a Promise (very old browsers/edge cases)
+                    if (testVideo.parentNode) document.body.removeChild(testVideo);
+                    console.warn("AUTOPLAY CHECK: video.play() did not return a Promise. Assuming gesture is required.");
+
+                    resolve(true); // Assume gesture is required
+                }
+            });
+        }
+
+        // Run the check when the DOM is ready
+            document.addEventListener('DOMContentLoaded', () => {
+                checkWebViewAutoplayPermission().then(requiresGesture => {
+                    console.log(`Autoplay permission check complete. Requires gesture: ${requiresGesture}`);
+                    // You can use the 'requiresGesture' boolean for further logic if needed
+                    // For now, it just updates the #permissionCheckMessage div and logs to console.
+                    if (requiresGesture) {
+                        video.muted = true;
+                        video.autoplay = true;
+                    } else {
+                        // still requires user gesture
+                        video.muted = false;
+                        video.autoplay = true;
+                    }
+
+                });
+            });
+        // --- END: WebView Autoplay Permission Check ---
+
+        // setTimeout(()=>{
+        // // video.muted = false;
+        // video.autoplay = true;
+        // console.log(video.muted , video.autoplay)
+        // })
         // Function to display user-friendly errors
         function displayError(message, isRetrying = false) {
             // Remove existing error messages first
@@ -128,7 +208,7 @@
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
                 console.log("Manifest parsed. Attempting to play video.");
                 clearError(); // Clear any previous errors on successful parse
-                video.play().catch(e => {
+                video.play().catch(e =>{
                     console.error("Autoplay with HLS.js failed:", e);
                     displayError("Autoplay failed. Please click the play button on the video controls.");
                     video.style.display = 'block';
