@@ -63,7 +63,7 @@
 </head>
 <body>
     <!-- Video element - width/height attributes are overridden by CSS but can be fallback -->
-    <video id="video" width="1280" height="800" controls autoplay muted playsinline></video>
+    <video id="video" width="1280" height="800" controls autoplay playsinline></video>
        <!-- Custom button is hidden by default via CSS -->
     <button id="customFullscreenBtn">Enter Fullscreen</button>
 
@@ -76,8 +76,10 @@
         let hls = null; // Keep track of hls instance
         let reloadTimeoutId = null; // To keep track of the reload timeout
         setTimeout(()=>{
-        console.log(video.muted)
+        console.log(video.muted , video.autoplay)
         video.muted = false;
+        video.autoplay = true;
+        console.log(video.muted , video.autoplay)
         })
         // Function to display user-friendly errors
         function displayError(message, isRetrying = false) {
