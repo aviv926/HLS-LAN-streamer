@@ -75,12 +75,11 @@
         const videoSrc = '/stream.m3u8';
         let hls = null; // Keep track of hls instance
         let reloadTimeoutId = null; // To keep track of the reload timeout
-        setTimeout(()=>{
-        console.log(video.muted , video.autoplay)
-        video.muted = false;
-        video.autoplay = true;
-        console.log(video.muted , video.autoplay)
-        })
+        // setTimeout(()=>{
+        // // video.muted = false;
+        // video.autoplay = true;
+        // console.log(video.muted , video.autoplay)
+        // })
         // Function to display user-friendly errors
         function displayError(message, isRetrying = false) {
             // Remove existing error messages first
@@ -133,12 +132,7 @@
             hls.on(Hls.Events.MANIFEST_PARSED, function () {
                 console.log("Manifest parsed. Attempting to play video.");
                 clearError(); // Clear any previous errors on successful parse
-                video.play().then(e => {
-                    setTimeout(()=>{
-                    console.log(video.muted)
-                    video.muted = false;
-                    })
-                 }).catch(e =>{
+                video.play().catch(e =>{
                     console.error("Autoplay with HLS.js failed:", e);
                     displayError("Autoplay failed. Please click the play button on the video controls.");
                     video.style.display = 'block';
@@ -226,12 +220,7 @@
             video.addEventListener('loadedmetadata', function () {
                 console.log("Metadata loaded for native HLS. Attempting to play video.");
                 clearError(); // Clear previous errors
-                 video.play().then(e => {
-                    setTimeout(()=>{
-                    console.log(video.muted)
-                    video.muted = false;
-                    })
-                 }).catch(e => {
+                 video.play().catch(e => {
                      console.error("Autoplay with native HLS failed:", e);
                      displayError("Autoplay failed. Please click the play button on the video controls.");
                      video.style.display = 'block';
