@@ -119,7 +119,7 @@
                         } else {
                             console.warn("AUTOPLAY CHECK: Failed with other error:", error.name, error.message);
 
-                            resolve(true); // Assume gesture is required if test is inconclusive
+                            resolve(false); // Assume gesture is required if test is inconclusive
                         }
                     });
                 } else {
